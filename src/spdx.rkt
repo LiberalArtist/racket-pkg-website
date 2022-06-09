@@ -7,7 +7,7 @@
          racket/match
          json)
 
-(provide check-license-sexp)
+(provide parse-license-jsexpr)
 
 (module+ test
   (require rackunit))
@@ -40,25 +40,65 @@
 (define custom-license-rx
   #px"^(?i:(?:DocumentRef-[-.[:alpha:][:digit:]]+:)?LicenseRef-[-.[:alpha:][:digit:]]+)$")
 
-;; check-license-id : symbol? -> (values boolean? (listof xexpr/c))
-(define (check-license-id sym)
-  (define (check-sans-+ str)
-    (cond
-      [(hash-ref licenses (string->symbol (string-foldcase str)) #f)
-       => (λ (url)
-            (values #t `((a ([href ,url]) ,str))))]
-      [(regexp-match? custom-license-rx str)
-       (values #t (list str))]
-      [else
-       (values #f `((span () ,str)))]))
-  (define str (symbol->immutable-string sym))
+
+(define memo (make-ephemeron-hasheq))
+
+;; parse-license-jsexpr : (or/c #f string?) -> (or/c 'missing
+;;                                                   (cons/c (or/c 'valid 'innvalid 'ill-formed)
+;;                                                           (listof xexpr/c)))
+;; INVARIANT: The argument should be interned in the sense of `datum-intern-literal`.
+(define (parse-license-jsexpr js)
   (cond
-    [(string-suffix? str "+")
-     (define-values [valid? xs]
-       (check-sans-+ (substring str 0 (sub1 (string-length str)))))
-     (values valid? `(,@xs "+"))]
+    [js
+     (hash-ref! memo
+                js
+                (λ ()
+                  (call-with-values (λ ()
+                                      (let/ec fail-k
+                                        (check-license-sexp
+                                         (call-with-default-reading-parameterization
+                                          (λ ()
+                                            (with-handlers ([exn:fail? (λ (e)
+                                                                         (fail-k))])
+                                              (read (open-input-string js)))))
+                                         fail-k)))
+                    (case-lambda
+                      [()
+                       `(ill-formed (code ,js))]
+                      [(valid? xs)
+                       (cons (if valid? 'valid 'invalid)
+                             xs)]))))]
     [else
-     (check-sans-+ str)]))
+     'missing]))
+
+
+;; check-license-sexp : any/c (-> none/c) -> (values boolean? (listof xexpr/c))
+;; Given an alleged license S-expression and a thunk that aborts the continuation,
+;; either calls the thunk (if the license-sexp is "ill-formed") or returns two values:
+;; a boolean indicating if the license-sexp is "valid" (i.e. all license and exception IDs
+;; are recognized) and its rendering as a list of x-expressions.
+(define (check-license-sexp v fail-k)
+  (let loop ([v v])
+    (match v
+      [(? symbol?)
+       (check-license-id v)]
+      [`(,(? symbol? (app check-license-id license-valid? license-xs))
+         WITH
+         ,(? symbol? (app check-exception-id exception-valid? exception-xs)))
+       (values (and license-valid? exception-valid?)
+               `("(" ,@license-xs " WITH " ,@exception-xs ")"))]
+      [`(,(app loop lhs-valid? lhs-xs)
+         ,(and (or 'AND 'OR) rator)
+         ,(app loop rhs-valid? rhs-xs))
+       (values (and lhs-valid? rhs-valid?)
+               `("(" ,@lhs-xs
+                     " "
+                     ,(symbol->immutable-string rator)
+                     " "
+                     ,@rhs-xs
+                     ")"))]
+      [_
+       (fail-k)])))
 
 
 ;; check-exception-id : symbol? -> (values boolean? (listof xexpr/c))
@@ -69,68 +109,76 @@
      => (λ (url)
           (values #t `((a ([href ,url]) ,str))))]
     [else
-     (values #f `((span () ,str)))]))
+     (values #f (invalid-id 'exception str))]))
 
 
-;; check-license-sexp : any/c -> (values (or/c 'valid 'invalid 'ill-formed)
-;;                                       (listof xexpr/c))
-(define (check-license-sexp orig)
-  (let/ec return
-    (define-values [valid? xs]
-      (let loop ([x orig])
-        (match x
-          [(? symbol?)
-           (check-license-id x)]
-          [`(,(? symbol? (app check-license-id license-valid? license-xs))
-             WITH
-             ,(? symbol? (app check-exception-id exception-valid? exception-xs)))
-           (values (and license-valid? exception-valid?)
-                   `("(" ,@license-xs " WITH " ,@exception-xs ")"))]
-          [`(,(app loop lhs-valid? lhs-xs)
-             ,(and (or 'AND 'OR) rator)
-             ,(app loop rhs-valid? rhs-xs))
-           (values (and lhs-valid? rhs-valid?)
-                   `("(" ,@lhs-xs
-                         " "
-                         ,(symbol->immutable-string rator)
-                         " "
-                         ,@rhs-xs
-                         ")"))]
-          [_
-           (return 'ill-formed (format "~s" orig))])))
-    (values (if valid? 'valid 'invalid)
-            xs)))
+;; check-license-id : symbol? -> (values boolean? (listof xexpr/c))
+(define (check-license-id sym)
+  (define (check-sans-+ str)
+    (cond
+      [(hash-ref licenses (string->symbol (string-foldcase str)) #f)
+       => (λ (url)
+            (values #t `((a ([href ,url]) ,str))))]
+      [(regexp-match? custom-license-rx str)
+       (values #t (list str))]
+      [else
+       (values #f (invalid-id 'license str))]))
+  (define str (symbol->immutable-string sym))
+  (cond
+    [(string-suffix? str "+")
+     (define-values [valid? xs]
+       (check-sans-+ (substring str 0 (sub1 (string-length str)))))
+     (values valid? `(,@xs "+"))]
+    [else
+     (check-sans-+ str)]))
+
+
+;; invalid-id : string? -> (listof xexpr/c)
+(define (invalid-id kind str)
+  `((s ([class "text-danger"]
+        [aria-description ,(match kind
+                             ['license
+                              "Invalid SPDX license identifier."]
+                             ['exception
+                              "Invalid SPDX exception identifier."])])
+       ,str)))
 
 (module+ test
-  (define-syntax-rule (status expr)
-    (call-with-values (λ () expr)
-      (λ (a b)
-        a)))
-  (check-eq?
-   (status (check-license-sexp
-            'SchemeReport))
+  (define-binary-check (check-pairof actual expected)
+    (equal? actual (cons expected expected)))
+  (define (status v)
+    (cons (match (parse-license-jsexpr
+                  (datum-intern-literal (format "~s" v)))
+            [(cons ret _)
+             ret]
+            [ret
+             ret])
+          (call-with-values (λ ()
+                              (let/ec fail-k
+                                (check-license-sexp v fail-k)))
+            (case-lambda
+              [()
+               'ill-formed]
+              [(valid? xs)
+               (if valid? 'valid 'invalid)]))))
+  (check-pairof
+   (status 'SchemeReport)
    'valid)
-  (check-eq?
-   (status (check-license-sexp
-            '(SchemeReport WITH Font-exception-2.0)))
+  (check-pairof
+   (status '(SchemeReport WITH Font-exception-2.0))
    'valid)
-  (check-eq?
-   (status (check-license-sexp
-            '((SchemeReport WITH Font-exception-2.0) OR MIT)))
+  (check-pairof
+   (status '((SchemeReport WITH Font-exception-2.0) OR MIT))
    'valid)
-  (check-eq?
-   (status (check-license-sexp
-            '((SchemeReport WITH Font-exception-2.0) OR (MIT AND XYZ))))
+  (check-pairof
+   (status '((SchemeReport WITH Font-exception-2.0) OR (MIT AND XYZ)))
    'invalid)
-  (check-eq?
-   (status (check-license-sexp
-            '((SchemeReport WITH Font-exception-2.0) OR (MIT AND LicenseRef-MIT-Style-1))))
+  (check-pairof
+   (status '((SchemeReport WITH Font-exception-2.0) OR (MIT AND LicenseRef-MIT-Style-1)))
    'valid)
-  (check-eq?
-   (status (check-license-sexp
-            'DocumentRef-spdx-tool-1.2:LicenseRef-MIT-Style-2))
+  (check-pairof
+   (status 'DocumentRef-spdx-tool-1.2:LicenseRef-MIT-Style-2)
    'valid)
-  (check-eq?
-   (status (check-license-sexp
-            '((SchemeReport WITH Font-exception-2.0) OR)))
+  (check-pairof
+   (status '((SchemeReport WITH Font-exception-2.0) OR))
    'ill-formed))

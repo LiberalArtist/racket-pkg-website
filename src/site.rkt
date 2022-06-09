@@ -29,6 +29,7 @@
 (require "config.rkt")
 (require "hash-utils.rkt")
 (require "static.rkt")
+(require "spdx.rkt")
 (require "package-source.rkt")
 (require "http-utils.rkt")
 (require "challenge.rkt")
@@ -602,6 +603,21 @@
 (define (tag-links tags)
   `(ul ((class "list-inline taglinks")) ,@(for/list ((tag (or tags '()))) `(li ,(tag-link tag)))))
 
+(define (license-links parsed)
+  `(ul ((class "list-inline licenselinks"))
+       ,@(match parsed
+           ['missing
+            '()]
+           [(cons 'valid xs)
+            `((li ,@xs))]
+           [(cons (and (or 'invalid 'ill-formed) status) xs)
+            `((li (span ((class "label label-danger"))
+                        ,(if (eq? 'ill-formed status)
+                             "Ill-formed metadata"
+                             "Unknown identifier"))
+                  " "
+                  ,@xs))])))
+
 (define (utc->string utc)
   (if (and utc (not (zero? utc)))
       (string-append (date->string (seconds->date utc #f) #t) " (UTC)")
@@ -627,6 +643,7 @@
 (define (package-build-conflicts-log pkg)    (@ pkg build conflicts-log))
 (define (package-ring pkg)                   (@ pkg ring))
 (define (package-checksum-error pkg)         (@ pkg checksum-error))
+(define (package-license-jsexpr pkg)         (@ pkg license))
 
 (define (package-readme-url pkg)
   (@ (package-external-information (string->symbol (@ pkg name))) readme-url))
@@ -641,7 +658,7 @@
 (define (package-last-updated pkg)      (or (@ pkg last-updated) 0))
 (define (package-last-checked pkg)      (or (@ pkg last-checked) 0))
 (define (package-last-edit pkg)         (or (@ pkg last-edit) 0))
-(define (package-date-added pkg)         (or (@ pkg date-added) 0))
+(define (package-date-added pkg)        (or (@ pkg date-added) 0))
 (define (package-authors pkg)           (or (@ pkg authors) '()))
 (define (package-description pkg)       (or (@ pkg description) ""))
 (define (package-tags pkg)              (or (@ pkg tags) '()))
@@ -702,7 +719,7 @@
   ;; Builds the list of rows in the package table as an x-exp.
   ;; Also returns the total number of non-zero todo keys,
   ;; representing packages with outstanding build errors or
-  ;; failing tests, or which are missing docs or tags.
+  ;; failing tests, or which are missing docs, license metadata, or tags.
   (define now (/ (current-inexact-milliseconds) 1000))
   (define-values (pkg-rows num-todos)
     (for/fold ([pkg-rows null] [num-todos 0])
@@ -712,11 +729,14 @@
       (define has-readme? (pair? (package-readme-url pkg)))
       (define has-tags? (pair? (package-tags pkg)))
       (define has-desc? (not (string=? "" (package-description pkg))))
+      (define pkg-license (parse-license-jsexpr (package-license-jsexpr pkg)))
+      (define has-license? (not (eq? 'missing pkg-license)))
       (define todokey
-        (cond [(package-build-failure-log pkg) 5]
-              [(package-build-test-failure-log pkg) 4]
-              [(not (or has-docs? has-readme?)) 3]
-              [(not has-desc?) 2]
+        (cond [(package-build-failure-log pkg) 6]
+              [(package-build-test-failure-log pkg) 5]
+              [(not (or has-docs? has-readme?)) 4]
+              [(not has-desc?) 3]
+              [(not has-license?) 2]
               [(not has-tags?) 1]
               [else 0]))
       (define row-xexp
@@ -729,7 +749,7 @@
                  (label-p "label-info" "New"))
               ,@(maybe-splice
                  (> 0 todokey)
-                 (label-p (if (< todokey 5)
+                 (label-p (if (< todokey 6)
                               "label-warning"
                               "label-danger") "Todo")))
           ,@(maybe-splice
@@ -757,7 +777,12 @@
                    (label-p "label-warning" "This package needs tags")
                    `(div
                      (span ((class "doctags-label")) "Tags: ")
-                     ,(tag-links (package-tags pkg)))))
+                     ,(tag-links (package-tags pkg))))
+              ,(if (not has-license?)
+                   (label-p "label-warning" "This package needs license metadata")
+                   `(div
+                     (span ((class "doctags-label")) "License: ")
+                     ,(license-links pkg-license))))
           ,(build-status-td pkg)
           (td ((style "display: none")) ,(number->string todokey))))
       (values (cons row-xexp pkg-rows)
@@ -1023,6 +1048,8 @@
                       (td ,(doc-links (package-docs pkg))))
                   (tr (th "Tags")
                       (td ,(tag-links (package-tags pkg))))
+                  (tr (th "License")
+                      (td ,(license-links (parse-license-jsexpr (package-license-jsexpr pkg)))))
                   (tr (th "Last updated")
                       (td ,(utc->string (package-last-updated pkg))))
                   (tr (th "Ring")
