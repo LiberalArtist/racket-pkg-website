@@ -730,13 +730,17 @@
       (define has-tags? (pair? (package-tags pkg)))
       (define has-desc? (not (string=? "" (package-description pkg))))
       (define pkg-license (parse-license-jsexpr (package-license-jsexpr pkg)))
-      (define has-license? (not (eq? 'missing pkg-license)))
+      (define has-valid-license? (match pkg-license
+                                   [(cons 'valid _)
+                                    #t]
+                                   [_
+                                    #f]))
       (define todokey
         (cond [(package-build-failure-log pkg) 6]
               [(package-build-test-failure-log pkg) 5]
               [(not (or has-docs? has-readme?)) 4]
               [(not has-desc?) 3]
-              [(not has-license?) 2]
+              [(not has-valid-license?) 2]
               [(not has-tags?) 1]
               [else 0]))
       (define row-xexp
@@ -778,7 +782,7 @@
                    `(div
                      (span ((class "doctags-label")) "Tags: ")
                      ,(tag-links (package-tags pkg))))
-              ,(if (not has-license?)
+              ,(if (eq? 'missing pkg-license)
                    (label-p "label-warning" "This package needs license metadata")
                    `(div
                      (span ((class "doctags-label")) "License: ")
