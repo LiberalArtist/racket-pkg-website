@@ -43,13 +43,14 @@
 
 (define memo (make-ephemeron-hasheq))
 
-;; parse-license-jsexpr : (or/c #f string?) -> (or/c 'missing
-;;                                                   (cons/c (or/c 'valid 'innvalid 'ill-formed)
-;;                                                           (listof xexpr/c)))
+;; parse-license-jsexpr : any/c -> (or/c 'missing
+;;                                       (cons/c (or/c 'valid 'innvalid 'ill-formed)
+;;                                               (listof xexpr/c)))
 ;; INVARIANT: The argument should be interned in the sense of `datum-intern-literal`.
+;; If the argument is not (or/c #f string?), we've gotten bad data from the back end.
 (define (parse-license-jsexpr js)
   (cond
-    [js
+    [(string? js)
      (hash-ref! memo
                 js
                 (λ ()
@@ -68,6 +69,11 @@
                       [(valid? xs)
                        (cons (if valid? 'valid 'invalid)
                              xs)]))))]
+    [js
+     (log-error "parse-license-jsexpr: ~a\n  expected: (or/c #f string?)\n  given: ~e"
+                "unexpected argument;\n please fix pkg-index"
+                js)
+    `(ill-formed (code ,(format "~v" js)))]
     [else
      'missing]))
 
