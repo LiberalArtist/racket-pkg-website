@@ -139,7 +139,7 @@
      (check-sans-+ str)]))
 
 
-;; invalid-id : string? -> (listof xexpr/c)
+;; invalid-id : (or/c 'license 'exception) string? -> (listof xexpr/c)
 (define (invalid-id kind str)
   `((s ([class "text-danger"]
         [aria-description ,(match kind
