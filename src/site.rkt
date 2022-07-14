@@ -618,6 +618,10 @@
                   " "
                   ,@xs))])))
 
+(define missing-license-tooltip-attributes
+  `([title "To add it, define `license` in “info.rkt”."]
+    [style "cursor: help;"]))
+
 (define (utc->string utc)
   (if (and utc (not (zero? utc)))
       (string-append (date->string (seconds->date utc #f) #t) " (UTC)")
@@ -783,7 +787,9 @@
                      (span ((class "doctags-label")) "Tags: ")
                      ,(tag-links (package-tags pkg))))
               ,(if (eq? 'missing pkg-license)
-                   (label-p "label-warning" "This package needs license metadata")
+                   (label-p "label-warning"
+                            "This package needs license metadata"
+                            #:extra-attributes missing-license-tooltip-attributes)
                    `(div
                      (span ((class "doctags-label")) "License: ")
                      ,(license-links pkg-license))))
@@ -794,8 +800,10 @@
   ;; for/fold reverses pkg-rows, so un-reverse before returning.
   (values (reverse pkg-rows) num-todos))
 
-(define (label-p cls txt)
-  `(p (span ((class ,(string-append "label " cls))) ,txt)))
+(define (label-p cls txt #:extra-attributes [attrs '()])
+  `(p (span ([class ,(string-append "label " cls)]
+             ,@attrs)
+            ,txt)))
 
 (define (build-status-td pkg)
   ;; Build the index page cell for summarizing a package's build status.
@@ -972,23 +980,25 @@
                        (match-define (list url-proc str label-type glyphicon-type) e)
                        (define u (url-proc pkg))
                        (if (not u) `(span) (build-status-button u str label-type glyphicon-type)))
-                   ,(let-values ([(label-type glyphicon-type str)
-                                  (match pkg-license
-                                    [(cons 'valid _)
-                                     (values "success" "ok" "valid license")]
-                                    [_
-                                     (values "warning" "question-sign"
-                                             (match pkg-license
-                                               [(cons 'ill-formed _)
-                                                "ill-formed license"]
-                                               [(cons 'invalid _)
-                                                "invalid license"]
-                                               ;; use the word "metadata" here so the user knows how
-                                               ;; we're getting the license information, since there
-                                               ;; won't be details from `license-links` below
-                                               ['missing
-                                                "missing license metadata"]))])])
-                      `(span " " (span ([class ,(format "build-status-button label label-~a" label-type)])
+                   ,(let ()
+                      (define (warning str [attrs '()])
+                        (values "warning" "question-sign" str attrs))
+                      (define-values [label-type glyphicon-type str attrs]
+                        (match pkg-license
+                          [(cons 'valid _)
+                           (values "success" "ok" "valid license" '())]
+                          [(cons 'ill-formed _)
+                           (warning "ill-formed license")]
+                          [(cons 'invalid _)
+                           (warning "invalid license")]
+                          ;; use the word "metadata" here so the user knows how
+                          ;; we're getting the license information, since there
+                          ;; won't be details from `license-links` below
+                          ['missing
+                           (warning "missing license metadata" missing-license-tooltip-attributes)]))
+                      `(span " " (span ([class ,(format "build-status-button label label-~a"
+                                                        label-type)]
+                                        ,@attrs)
                                        ,(glyphicon glyphicon-type) " " ,str))))
                 (div ((class "dropdown"))
                      ,@(let ((docs (package-docs pkg)))
