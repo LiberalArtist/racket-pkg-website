@@ -949,7 +949,8 @@
      [(and (not (rendering-static-page?)) (use-cache?))
       (bootstrap-redirect (view-package-url package-name))]
      [else
-      (let ((default-version (package-default-version pkg)))
+      (let ((default-version (package-default-version pkg))
+            (pkg-license (parse-license-jsexpr (package-license-jsexpr pkg))))
         (bootstrap-response (~a package-name)
           #:title-element ""
           #:description (package-description pkg)
@@ -958,7 +959,7 @@
                 (p ,(package-description pkg))
                 (p ((class "build-status"))
                    "Build status: "
-                   ,@(for/list [(e (list (list package-build-failure-log
+                   ,@(for/list ([e (list (list package-build-failure-log
                                                "failed" "danger" "fire")
                                          (list package-build-success-log
                                                "ok" "success" "ok")
@@ -967,10 +968,28 @@
                                          (list package-build-test-failure-log
                                                "failing tests" "warning" "question-sign")
                                          (list package-build-test-success-log
-                                               "passing tests" "success" "ok")))]
+                                               "passing tests" "success" "ok"))])
                        (match-define (list url-proc str label-type glyphicon-type) e)
                        (define u (url-proc pkg))
-                       (if (not u) `(span) (build-status-button u str label-type glyphicon-type))))
+                       (if (not u) `(span) (build-status-button u str label-type glyphicon-type)))
+                   ,(let-values ([(label-type glyphicon-type str)
+                                  (match pkg-license
+                                    [(cons 'valid _)
+                                     (values "success" "ok" "valid license")]
+                                    [_
+                                     (values "warning" "question-sign"
+                                             (match pkg-license
+                                               [(cons 'ill-formed _)
+                                                "ill-formed license"]
+                                               [(cons 'invalid _)
+                                                "invalid license"]
+                                               ;; use the word "metadata" here so the user knows how
+                                               ;; we're getting the license information, since there
+                                               ;; won't be details from `license-links` below
+                                               ['missing
+                                                "missing license metadata"]))])])
+                      `(span " " (span ([class ,(format "build-status-button label label-~a" label-type)])
+                                       ,(glyphicon glyphicon-type) " " ,str))))
                 (div ((class "dropdown"))
                      ,@(let ((docs (package-docs pkg)))
                          (match docs
@@ -1053,7 +1072,7 @@
                   (tr (th "Tags")
                       (td ,(tag-links (package-tags pkg))))
                   (tr (th "License")
-                      (td ,(license-links (parse-license-jsexpr (package-license-jsexpr pkg)))))
+                      (td ,(license-links pkg-license)))
                   (tr (th "Last updated")
                       (td ,(utc->string (package-last-updated pkg))))
                   (tr (th "Ring")
